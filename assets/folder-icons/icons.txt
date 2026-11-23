@@ -1,0 +1,13 @@
+AI Tools|ai.ico
+Developer|dev.ico
+Creative|creative.ico
+Productivity|productivity.ico
+System & Games|system.ico
+Documents|documents.ico
+Apps|apps.ico
+whitedot|projects.ico
+JARVIS|projects.ico
+clg|plain.ico
+adobe|plain.ico
+Laptop-Optimization-Backup|plain.ico
+Crack-Win|plain.ico

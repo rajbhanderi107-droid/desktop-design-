@@ -1,0 +1,17 @@
+{
+ "width": 1920.0,
+ "height": 1080.0,
+ "horizon": 648.0,
+ "hatCenter": [
+  1344.0,
+  324.0
+ ],
+ "shipX": 768.0,
+ "shipWaterline": 102.0,
+ "sunX": 1228.8,
+ "sunR": 115.0,
+ "hatAnchor": [
+  241.0,
+  116.0
+ ]
+}
