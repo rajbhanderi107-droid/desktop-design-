@@ -285,7 +285,31 @@ abstract class Widget : Form
 
     // Rich card material: three-tone gradient, a warm glow from the top-left, film grain,
     // a champagne-gold hairline (bright at the top, fading down) and a soft inner top highlight.
+    // The card material is the same every frame, so it is painted once per size/colour and reused
+    // (the clock redraws 10 times a second; repainting grain and glow each time cost ~8% CPU).
+    readonly Dictionary<string, Bitmap> cardCache = new Dictionary<string, Bitmap>();
+    Bitmap shadowCache;
+
     protected void FillCard(Graphics g, RectangleF card, Color top, Color bottom)
+    {
+        string key = (int)card.Width + "x" + (int)card.Height + ":" + top.ToArgb() + ":" + bottom.ToArgb();
+        Bitmap bmp;
+        if (!cardCache.TryGetValue(key, out bmp))
+        {
+            if (cardCache.Count > 8) { foreach (var b in cardCache.Values) b.Dispose(); cardCache.Clear(); }
+            bmp = new Bitmap((int)Math.Ceiling(card.Width) + 2, (int)Math.Ceiling(card.Height) + 2, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var cg = Graphics.FromImage(bmp))
+            {
+                cg.SmoothingMode = SmoothingMode.AntiAlias;
+                cg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                PaintCard(cg, new RectangleF(1, 1, card.Width, card.Height), top, bottom);
+            }
+            cardCache[key] = bmp;
+        }
+        g.DrawImageUnscaled(bmp, (int)Math.Round(card.X) - 1, (int)Math.Round(card.Y) - 1);
+    }
+
+    void PaintCard(Graphics g, RectangleF card, Color top, Color bottom)
     {
         using (var path = Round(card, Radius))
         {
@@ -374,15 +398,32 @@ abstract class Widget : Form
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             RectangleF card = CardRect;
             // Soft layered shadow, deeper while hovered
-            // Deep, soft, slightly warm shadow (more layers, lower opacity each), deeper while hovered
-            int layers = 10;
-            for (int i = layers; i >= 1; i--)
+            // Deep, soft, slightly warm shadow (more layers, lower opacity each), deeper while hovered.
+            // Cached at rest; only redrawn live while the hover lift is animating.
+            bool resting = hover == 0;
+            if (resting && shadowCache != null && shadowCache.Width == Width && shadowCache.Height == Height)
+                g.DrawImageUnscaled(shadowCache, 0, 0);
+            else
             {
-                float spread = i * Sc * (1.25f + (float)hover * 0.45f);
-                var r = new RectangleF(card.X - spread * 0.8f, card.Y - spread * 0.6f + S(7) + (float)hover * S(3), card.Width + spread * 1.6f, card.Height + spread * 1.6f);
-                using (var path = Round(r, Radius + spread))
-                using (var b = new SolidBrush(Color.FromArgb((int)(7 + hover * 2), 12, 4, 10)))
-                    g.FillPath(b, path);
+                Bitmap target = resting ? new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb) : null;
+                Graphics sg = resting ? Graphics.FromImage(target) : g;
+                sg.SmoothingMode = SmoothingMode.AntiAlias;
+                int layers = 10;
+                for (int i = layers; i >= 1; i--)
+                {
+                    float spread = i * Sc * (1.25f + (float)hover * 0.45f);
+                    var r = new RectangleF(card.X - spread * 0.8f, card.Y - spread * 0.6f + S(7) + (float)hover * S(3), card.Width + spread * 1.6f, card.Height + spread * 1.6f);
+                    using (var path = Round(r, Radius + spread))
+                    using (var b = new SolidBrush(Color.FromArgb((int)(7 + hover * 2), 12, 4, 10)))
+                        sg.FillPath(b, path);
+                }
+                if (resting)
+                {
+                    sg.Dispose();
+                    if (shadowCache != null) shadowCache.Dispose();
+                    shadowCache = target;
+                    g.DrawImageUnscaled(shadowCache, 0, 0);
+                }
             }
             Draw(g, card);
         }
