@@ -38,6 +38,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Only DeskWidgets
 |---|---|
 | Wallpapers | `%USERPROFILE%\Pictures\Wallpapers\` (`Straw-Hat-Sunset-4K.jpg` full, `-Base-4K.jpg` without hat/ship for the animated scene) |
 | Scene cut-outs | `%USERPROFILE%\Pictures\Wallpapers\Scene\` (`hat.png`, `ship.png`, `scene.json`); user's own ship image goes in `Scene\Your ship\` |
+| Crew scene | `%USERPROFILE%\Pictures\Wallpapers\Crew\crew-4K.jpg`: the user's own crew picture, upscaled. **Stays local, never commit it** (it shows copyrighted characters). `settings.ini` `sceneMode=crew` animates petals, twinkling stars, water glints and gulls over it; `sceneMode=sunset` is the original drawn scene |
 | Folder icons | `%USERPROFILE%\Pictures\Wallpapers\FolderIcons\` (`*.ico` for Explorer, `*.png` for the widget, `icons.txt` = `Folder name|icon.ico`) |
 | Widget photos | `%USERPROFILE%\Pictures\Widgets\photo1.jpg … photo5.jpg` (hot-reloaded) |
 | Widget settings | `%LOCALAPPDATA%\DeskWidgets\settings.ini` (city/lat/lon, `pos.<id>`, `scene=1`), `todo.txt` |

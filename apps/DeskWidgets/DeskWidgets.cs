@@ -1383,9 +1383,162 @@ static class Scene
         SystemParametersInfo(20, 0, path, 3);
     }
 
+    // "crew" = the user's own Straw Hat crew picture brought to life; "sunset" = the original drawn sunset scene.
+    public static string Mode
+    {
+        get { return Settings.Get("sceneMode", File.Exists(CrewWallpaper) ? "crew" : "sunset"); }
+        set { Stop(); Settings.Set("sceneMode", value); if (Enabled) Start(); }
+    }
+
+    public static string CurrentWallpaper { get { return Mode == "crew" && File.Exists(CrewWallpaper) ? CrewWallpaper : BaseWallpaper; } }
+
+    static readonly string CrewWallpaper = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), @"Wallpapers\Crew\crew-4K.jpg");
+    static readonly List<Sprite> petals = new List<Sprite>(), twinkles = new List<Sprite>(), sprays = new List<Sprite>();
+    static double[][] petalData, twinkleData, sprayData;
+
+    // Small four-point star, drawn once; twinkling is done by changing the sprite's opacity only.
+    static Sprite Star(int size, Color col)
+    {
+        var s = new Sprite(size, size);
+        s.Paint_ = g =>
+        {
+            float c = size / 2f, r = size / 2f;
+            using (var path = new GraphicsPath())
+            {
+                path.AddPolygon(new[] { new PointF(c, 0), new PointF(c + r * 0.16f, c - r * 0.16f), new PointF(size, c), new PointF(c + r * 0.16f, c + r * 0.16f),
+                                        new PointF(c, size), new PointF(c - r * 0.16f, c + r * 0.16f), new PointF(0, c), new PointF(c - r * 0.16f, c - r * 0.16f) });
+                using (var b = new PathGradientBrush(path) { CenterColor = Color.FromArgb(255, 255, 255, 255), SurroundColors = new[] { Color.FromArgb(0, col) } })
+                    g.FillPath(b, path);
+            }
+            using (var glow = new SolidBrush(Color.FromArgb(120, col))) g.FillEllipse(glow, c - r * 0.22f, c - r * 0.22f, r * 0.44f, r * 0.44f);
+        };
+        return s;
+    }
+
+    static void StartCrew()
+    {
+        SetWallpaper(CrewWallpaper);
+        Rectangle screen = Screen.PrimaryScreen.Bounds;
+        k = screen.Width / 1920.0;
+        sprites.Clear(); petals.Clear(); twinkles.Clear(); sprays.Clear(); gulls.Clear();
+
+        // pink petals drifting across the whole screen (as in the picture)
+        petalData = new double[11][];
+        for (int i = 0; i < petalData.Length; i++)
+        {
+            double size = (16 + rnd.NextDouble() * 14) * k;
+            // start phase, speed, sway, spin, size
+            petalData[i] = new[] { rnd.NextDouble(), 0.035 + rnd.NextDouble() * 0.03, 20 + rnd.NextDouble() * 40, rnd.NextDouble() * 2 - 1, size, rnd.NextDouble() * 6.28 };
+            int box = (int)(size * 1.6) + 4;
+            var s = new Sprite(box, box);
+            double[] pd = petalData[i];
+            s.Paint_ = g =>
+            {
+                double t = clock.Elapsed.TotalSeconds;
+                g.TranslateTransform(box / 2f, box / 2f);
+                g.RotateTransform((float)(t * 60 * pd[3] + pd[5] * 57));
+                float w = (float)pd[4], h = (float)(pd[4] * 0.55 * (0.6 + 0.4 * Math.Abs(Math.Sin(t * 2.2 + pd[5]))));
+                using (var path = new GraphicsPath())
+                {
+                    path.AddBezier(-w / 2, 0, -w / 4, -h, w / 4, -h, w / 2, 0);
+                    path.AddBezier(w / 2, 0, w / 4, h, -w / 4, h, -w / 2, 0);
+                    using (var b = new LinearGradientBrush(new RectangleF(-w / 2, -h, w, h * 2), Color.FromArgb(235, 255, 196, 220), Color.FromArgb(235, 236, 120, 168), 90f))
+                        g.FillPath(b, path);
+                }
+            };
+            petals.Add(s);
+        }
+
+        // twinkling stars across the sky (upper right of the picture)
+        twinkleData = new double[16][];
+        for (int i = 0; i < twinkleData.Length; i++)
+        {
+            twinkleData[i] = new[] { 0.46 + rnd.NextDouble() * 0.52, 0.02 + rnd.NextDouble() * 0.34, rnd.NextDouble() * 6.28, 0.5 + rnd.NextDouble() * 1.2 };
+            var s = Star((int)((14 + rnd.NextDouble() * 16) * k), Color.FromArgb(255, 255, 236, 200));
+            twinkles.Add(s);
+        }
+
+        // glints on the splashing water (bottom left of the picture)
+        sprayData = new double[12][];
+        for (int i = 0; i < sprayData.Length; i++)
+        {
+            sprayData[i] = new[] { rnd.NextDouble() * 0.30, 0.74 + rnd.NextDouble() * 0.24, rnd.NextDouble() * 6.28, 1.2 + rnd.NextDouble() * 1.8 };
+            sprays.Add(Star((int)((10 + rnd.NextDouble() * 12) * k), Color.FromArgb(255, 200, 235, 255)));
+        }
+
+        // white seagulls gliding over the sky
+        for (int i = 0; i < 4; i++)
+        {
+            double size = (13 + i * 3) * k;
+            var s = new Sprite((int)(size * 2.4), (int)(size * 1.6));
+            double phase = i * 1.7;
+            s.Paint_ = g =>
+            {
+                double t = clock.Elapsed.TotalSeconds;
+                float flap = (float)Math.Sin(t * 4.5 + phase);
+                float cx = s.Width / 2f, cy = s.Height * 0.55f, wing = (float)size;
+                float tip = cy - flap * wing * 0.45f, mid = cy - wing * 0.35f - flap * wing * 0.15f;
+                using (var p = new Pen(Color.FromArgb(240, 250, 250, 255), Math.Max(1.6f, (float)(size * 0.14))) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                {
+                    g.DrawCurve(p, new[] { new PointF(cx - wing, tip), new PointF(cx - wing * 0.45f, mid), new PointF(cx, cy) });
+                    g.DrawCurve(p, new[] { new PointF(cx, cy), new PointF(cx + wing * 0.45f, mid), new PointF(cx + wing, tip) });
+                }
+            };
+            gulls.Add(s);
+        }
+
+        sprites.AddRange(twinkles);
+        sprites.AddRange(sprays);
+        sprites.AddRange(gulls);
+        sprites.AddRange(petals);
+        foreach (var s in sprites) { s.Show(); s.Draw(); }
+
+        timer = new System.Windows.Forms.Timer { Interval = 66 };
+        timer.Tick += (s, e) => Tick();
+        timer.Start();
+        Tick();
+    }
+
+    static void TickCrew(double t, Rectangle screen)
+    {
+        int W = screen.Width, H = screen.Height;
+        for (int i = 0; i < petals.Count; i++)
+        {
+            var pd = petalData[i];
+            double p = (pd[0] + t * pd[1] * 0.25) % 1.0;          // 0..1 along the path
+            double x = -60 * k + p * (W + 120 * k) + Math.Sin(t * 0.9 + pd[5]) * pd[2] * k;
+            double y = -40 * k + p * (H * 0.9) + Math.Sin(t * 1.3 + pd[5] * 2) * 18 * k + (pd[5] / 6.28) * H * 0.25;
+            petals[i].Draw();
+            petals[i].Present((int)x, (int)y);
+        }
+        for (int i = 0; i < twinkles.Count; i++)
+        {
+            var td = twinkleData[i];
+            double a = Math.Pow(Math.Max(0, Math.Sin(t * td[3] + td[2])), 3);
+            twinkles[i].Opacity_ = (byte)(255 * a);
+            twinkles[i].Present((int)(td[0] * W), (int)(td[1] * H));
+        }
+        for (int i = 0; i < sprays.Count; i++)
+        {
+            var gd = sprayData[i];
+            double a = Math.Pow(Math.Max(0, Math.Sin(t * gd[3] + gd[2])), 4);
+            sprays[i].Opacity_ = (byte)(255 * a);
+            sprays[i].Present((int)(gd[0] * W), (int)(gd[1] * H));
+        }
+        double gx0 = 0.40 * W, gx1 = 0.97 * W;
+        for (int i = 0; i < gulls.Count; i++)
+        {
+            double x = gx0 + ((i * 0.27 * (gx1 - gx0) + t * (16 + i * 4) * k) % (gx1 - gx0));
+            double y = (0.05 + i * 0.035) * H + Math.Sin(t * 0.5 + i) * 12 * k;
+            gulls[i].Draw();
+            gulls[i].Present((int)x, (int)y);
+        }
+    }
+
     public static void Start()
     {
         if (timer != null) return;
+        if (Mode == "crew" && File.Exists(CrewWallpaper)) { StartCrew(); return; }
         string json = Path.Combine(Dir, "scene.json");
         if (!File.Exists(json) || !File.Exists(BaseWallpaper)) return;
         var info = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(json));
@@ -1481,8 +1634,9 @@ static class Scene
         if (timer != null) { timer.Stop(); timer.Dispose(); timer = null; }
         foreach (var s in sprites) s.Close();
         sprites.Clear();
-        gulls.Clear();
-        SetWallpaper(FullWallpaper);
+        gulls.Clear(); petals.Clear(); twinkles.Clear(); sprays.Clear();
+        // the crew picture stays as a still wallpaper; the sunset scene needs its full version back (with the hat)
+        if (Mode != "crew") SetWallpaper(FullWallpaper);
     }
 
     // Nothing to see while a maximised or full-screen window covers the desktop, so skip the work.
@@ -1501,7 +1655,12 @@ static class Scene
         Tick(true);
         foreach (var s in sprites)
             using (var b = s.Copy())
-                if (b != null) g.DrawImage(b, s.X_, s.Y_);
+                if (b != null && s.Opacity_ > 0)
+                    using (var ia = new System.Drawing.Imaging.ImageAttributes())
+                    {
+                        ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = s.Opacity_ / 255f });
+                        g.DrawImage(b, new Rectangle(s.X_, s.Y_, b.Width, b.Height), 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, ia);
+                    }
     }
 
     static void Tick() { Tick(false); }
@@ -1512,6 +1671,7 @@ static class Scene
         timer.Interval = 66;
         double t = clock.Elapsed.TotalSeconds;
         Rectangle screen = Screen.PrimaryScreen.Bounds;
+        if (petals.Count > 0) { TickCrew(t, screen); return; }
 
         // hat: gentle bob and sway, as if held up by the wind
         hat.Draw();
@@ -1610,6 +1770,15 @@ static class Program
             var sceneItem = new ToolStripMenuItem("Animated scene") { Checked = Scene.Enabled, CheckOnClick = true };
             sceneItem.CheckedChanged += (s, e) => Scene.Enabled = sceneItem.Checked;
             menu.Items.Add(sceneItem);
+            var styles = new ToolStripMenuItem("Scene style");
+            var crew = new ToolStripMenuItem("Straw Hat crew (your picture)") { Checked = Scene.Mode == "crew" };
+            var sunset = new ToolStripMenuItem("Straw hat sunset") { Checked = Scene.Mode != "crew" };
+            crew.Click += (s, e) => { Scene.Mode = "crew"; crew.Checked = true; sunset.Checked = false; };
+            sunset.Click += (s, e) => { Scene.Mode = "sunset"; sunset.Checked = true; crew.Checked = false; };
+            styles.DropDownItems.Add(crew);
+            styles.DropDownItems.Add(sunset);
+            foreach (ToolStripItem it in styles.DropDownItems) it.ForeColor = Theme.Text;
+            menu.Items.Add(styles);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Close widgets", null, (s, e) => Application.Exit());
             foreach (ToolStripItem it in menu.Items) it.ForeColor = Theme.Text;
@@ -1640,7 +1809,7 @@ static class Program
                     using (var g = Graphics.FromImage(canvas))
                     {
                         string wp = (string)Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Desktop", "WallPaper", "");
-                        if (Scene.Enabled) wp = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), @"Wallpapers\Straw-Hat-Sunset-Base-4K.jpg");
+                        if (Scene.Enabled) wp = Scene.CurrentWallpaper;
                         if (File.Exists(wp)) using (var img = Image.FromFile(wp)) g.DrawImage(img, 0, 0, b.Width, b.Height);
                         Scene.Render(g);
                         foreach (var w in widgets)
