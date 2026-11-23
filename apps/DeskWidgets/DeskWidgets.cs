@@ -608,12 +608,52 @@ class ClockWidget : Widget
         if (showPeriod) time = time.Substring(0, time.Length - period.Length).TrimEnd();
 
         using (var f = F(11, FontStyle.Bold)) Label(g, "LOCAL TIME", f, Theme.Gold, new RectangleF(x, card.Y + S(15), w, S(18)), StringAlignment.Near);
-        using (var f = D(time.Length > 5 ? 30 : 40, FontStyle.Bold)) Label(g, time, f, Theme.Text, new RectangleF(x - S(2), card.Y + S(36), w + S(4), S(52)), StringAlignment.Near);
-        if (showPeriod)
-            using (var f = F(12, FontStyle.Bold)) Label(g, period, f, Theme.Gold, new RectangleF(x, card.Y + S(91), w, S(19)), StringAlignment.Near);
-        using (var line = new Pen(Color.FromArgb(40, Theme.Text), Math.Max(1f, S(1))))
-            g.DrawLine(line, x, card.Bottom - S(44), x + w, card.Bottom - S(44));
+
+        // Large numerals: soft white-to-champagne gradient over a faint gold glow.
+        float numSize = time.Length > 5 ? 34 : 44;
+        var numRect = new RectangleF(x - S(3), card.Y + S(32), w + S(6), S(56));
+        using (var glowPath = new GraphicsPath())
+        {
+            var gr = new RectangleF(x - S(6), card.Y + S(36), w * 0.9f, S(48));
+            glowPath.AddEllipse(gr);
+            using (var glow = new PathGradientBrush(glowPath) { CenterColor = Color.FromArgb(34, 247, 205, 126), SurroundColors = new[] { Color.FromArgb(0, 247, 205, 126) } })
+                g.FillPath(glow, glowPath);
+        }
+        using (var f = D(numSize, FontStyle.Bold))
+        using (var b = new LinearGradientBrush(new RectangleF(numRect.X, numRect.Y + S(6), numRect.Width, S(44)), Color.FromArgb(255, 255, 255, 255), Color.FromArgb(255, 238, 214, 168), 90f))
+        using (var sf = new StringFormat { FormatFlags = StringFormatFlags.NoWrap })
+        {
+            g.DrawString(time, f, b, numRect, sf);
+            if (showPeriod)
+            {
+                // AM/PM sits beside the numerals as a small gold label
+                float tw = g.MeasureString(time, f, numRect.Size, sf).Width;
+                using (var pf = F(12, FontStyle.Bold))
+                    Label(g, period, pf, Theme.Gold, new RectangleF(numRect.X + tw - S(4), numRect.Y + S(12), S(40), S(18)), StringAlignment.Near);
+            }
+        }
+
+        // Day progress: sea at midnight, gold at noon, red by night; a dot marks now.
+        float lineY = card.Bottom - S(46);
+        var track = new RectangleF(x, lineY - S(1.5f), w, S(3));
+        using (var tp = Round(track, S(1.5f)))
+        using (var tb = new SolidBrush(Color.FromArgb(38, Theme.Text)))
+            g.FillPath(tb, tp);
+        double dayFrac = now.TimeOfDay.TotalMinutes / 1440.0;
+        var done = new RectangleF(x, track.Y, Math.Max(S(3), (float)(w * dayFrac)), track.Height);
+        using (var dp = Round(done, S(1.5f)))
+        using (var db = new LinearGradientBrush(track, Theme.Sea, Theme.Red, 0f))
+        {
+            db.InterpolationColors = new ColorBlend(3) { Colors = new[] { Theme.Sea, Theme.Gold, Theme.Red }, Positions = new[] { 0f, 0.5f, 1f } };
+            g.FillPath(db, dp);
+        }
+        float dotX = x + (float)(w * dayFrac);
+        using (var halo = new SolidBrush(Color.FromArgb(60, Theme.Gold))) g.FillEllipse(halo, dotX - S(5), lineY - S(5), S(10), S(10));
+        using (var dot = new SolidBrush(Color.White)) g.FillEllipse(dot, dotX - S(3), lineY - S(3), S(6), S(6));
+
         using (var f = F(12, FontStyle.Regular)) Label(g, now.ToString("ddd, d MMM"), f, Theme.Dim, new RectangleF(x, card.Bottom - S(34), w, S(20)), StringAlignment.Near);
+        int week = System.Globalization.CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(now, System.Globalization.CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
+        using (var f = F(10.5f, FontStyle.Bold)) Label(g, "W" + week, f, Color.FromArgb(120, Theme.Text), new RectangleF(x, card.Bottom - S(33), w, S(20)), StringAlignment.Far);
     }
 }
 
@@ -791,7 +831,14 @@ class WeatherWidget : Widget
 
     public WeatherWidget(int x, int y) : base("weather", Theme.Medium, Theme.Unit, x, y)
     {
-        if (Preview) status = "Forecast unavailable in preview";
+        // Previews never show the window (so nothing downloads); use a sample forecast so the design can be judged.
+        if (Preview)
+        {
+            status = null; temp = 30; hi = 32; lo = 20; code = 0; day = true; sun = "Sunset 5:53 pm";
+            string[] h = { "Now", "6pm", "7pm", "8pm", "9pm", "10pm" };
+            double[] t = { 30, 29, 28, 27, 26, 25 };
+            for (int i = 0; i < h.Length; i++) { hours.Add(h[i]); hourTemps.Add(t[i]); hourCodes.Add(i < 2 ? 1 : 0); hourDay.Add(i < 1); }
+        }
     }
 
     protected override void OnShown(EventArgs e)
@@ -870,9 +917,30 @@ class WeatherWidget : Widget
         catch (InvalidOperationException) { }
     }
 
+    // Sky tint for the top of the card: day blue, golden hour, night navy, grey in rain.
+    Color SkyTint()
+    {
+        int h = DateTime.Now.Hour;
+        if (code >= 51) return Color.FromArgb(120, 150, 165, 190);
+        if (!day) return Color.FromArgb(120, 70, 90, 190);
+        if (h >= 17 || h < 8) return Color.FromArgb(120, 236, 130, 90);
+        return Color.FromArgb(120, 80, 150, 235);
+    }
+
     protected override void Draw(Graphics g, RectangleF card)
     {
         FillCard(g, card);
+
+        // Sky-coloured light washing down from the top of the card
+        if (status == null)
+            using (var path = Round(card, Radius))
+            using (var sky = new LinearGradientBrush(new RectangleF(card.X, card.Y - 1, card.Width, card.Height * 0.75f + 2), SkyTint(), Color.FromArgb(0, SkyTint()), 90f))
+            {
+                var state = g.Save();
+                g.SetClip(path);
+                g.FillRectangle(sky, card.X, card.Y, card.Width, card.Height * 0.75f);
+                g.Restore(state);
+            }
 
         float x = card.X + S(18), y = card.Y + S(14), w = card.Width - S(36);
         using (var f = D(14, FontStyle.Bold)) Label(g, Settings.Get("city", "Ahmedabad"), f, Theme.Text, new RectangleF(x, y, w * 0.72f, S(20)), StringAlignment.Near);
@@ -881,23 +949,68 @@ class WeatherWidget : Widget
             using (var f = F(13, FontStyle.Regular)) Label(g, status, f, Theme.Dim, new RectangleF(x, y + S(36), w, S(20)), StringAlignment.Near);
             return;
         }
-        using (var f = new Font("Segoe UI Variable Display Light", S(42), GraphicsUnit.Pixel))
-            Label(g, Math.Round(temp) + "°", f, Color.White, new RectangleF(x - S(3), y + S(14), w * 0.5f, S(56)), StringAlignment.Near);
 
-        WeatherArt.Icon(g, code, day, new RectangleF(card.Right - S(18) - S(26), y - S(2), S(26), S(26)));
-        using (var f = F(13, FontStyle.Bold)) Label(g, WeatherArt.Describe(code), f, Color.White, new RectangleF(x, y + S(28), w, S(18)), StringAlignment.Far);
-        using (var f = F(12, FontStyle.Regular)) Label(g, "High " + Math.Round(hi) + "°   Low " + Math.Round(lo) + "°", f, Theme.Dim, new RectangleF(x, y + S(46), w, S(18)), StringAlignment.Far);
-        using (var f = F(10.5f, FontStyle.Regular)) Label(g, sun, f, Color.FromArgb(190, 255, 255, 255), new RectangleF(x, y + S(63), w, S(16)), StringAlignment.Far);
+        // Big temperature with a white-to-champagne gradient
+        using (var f = new Font("Segoe UI Variable Display Light", S(46), GraphicsUnit.Pixel))
+        using (var b = new LinearGradientBrush(new RectangleF(x, y + S(20), w * 0.5f, S(48)), Color.White, Color.FromArgb(255, 238, 214, 168), 90f))
+        using (var sf = new StringFormat { FormatFlags = StringFormatFlags.NoWrap })
+            g.DrawString(Math.Round(temp) + "°", f, b, new RectangleF(x - S(4), y + S(10), w * 0.5f, S(60)), sf);
 
-        float rowY = card.Bottom - S(66), colW = w / Math.Max(1, hours.Count);
-        using (var line = new Pen(Color.FromArgb(40, 255, 255, 255), 1f)) g.DrawLine(line, x, rowY - S(8), x + w, rowY - S(8));
+        // Icon with a soft halo
+        var iconRect = new RectangleF(card.Right - S(18) - S(32), y - S(4), S(32), S(32));
+        using (var haloPath = new GraphicsPath())
+        {
+            var hr = iconRect;
+            hr.Inflate(S(12), S(12));
+            haloPath.AddEllipse(hr);
+            Color haloCol = day && code <= 2 ? Color.FromArgb(70, 255, 210, 110) : Color.FromArgb(46, 220, 230, 255);
+            using (var halo = new PathGradientBrush(haloPath) { CenterColor = haloCol, SurroundColors = new[] { Color.FromArgb(0, haloCol) } })
+                g.FillPath(halo, haloPath);
+        }
+        WeatherArt.Icon(g, code, day, iconRect);
+
+        using (var f = F(13, FontStyle.Bold)) Label(g, WeatherArt.Describe(code), f, Color.White, new RectangleF(x, y + S(32), w, S(18)), StringAlignment.Far);
+        using (var f = F(10.5f, FontStyle.Regular)) Label(g, sun, f, Color.FromArgb(190, 255, 255, 255), new RectangleF(x, y + S(50), w, S(16)), StringAlignment.Far);
+
+        // Apple-style range bar: today's low → high, dot at the current temperature
+        float barW = S(108), barX = card.Right - S(18) - barW, barY = y + S(73);
+        using (var f = F(10.5f, FontStyle.Bold))
+        {
+            Label(g, Math.Round(lo) + "°", f, Theme.Dim, new RectangleF(barX - S(34), barY - S(8), S(30), S(16)), StringAlignment.Far);
+            Label(g, Math.Round(hi) + "°", f, Theme.Text, new RectangleF(barX + barW + S(4), barY - S(8), S(30), S(16)), StringAlignment.Near);
+        }
+        barW -= S(2);
+        var bar = new RectangleF(barX, barY - S(2), barW, S(4));
+        using (var bp = Round(bar, S(2)))
+        using (var bb = new LinearGradientBrush(bar, Theme.Sea, Theme.Red, 0f))
+        {
+            bb.InterpolationColors = new ColorBlend(3) { Colors = new[] { Theme.Sea, Theme.Gold, Theme.Red }, Positions = new[] { 0f, 0.55f, 1f } };
+            g.FillPath(bb, bp);
+        }
+        double frac = hi > lo ? Math.Max(0, Math.Min(1, (temp - lo) / (hi - lo))) : 0.5;
+        float dx = barX + (float)(barW * frac);
+        using (var ring = new SolidBrush(Color.FromArgb(200, 14, 19, 31))) g.FillEllipse(ring, dx - S(4.5f), barY - S(4.5f), S(9), S(9));
+        using (var dot = new SolidBrush(Color.White)) g.FillEllipse(dot, dx - S(3), barY - S(3), S(6), S(6));
+
+        // Hourly forecast in a frosted capsule, with "Now" highlighted
+        float rowY = card.Bottom - S(62), colW = w / Math.Max(1, hours.Count);
+        var capsule = new RectangleF(x - S(8), rowY - S(6), w + S(16), S(62));
+        using (var cp = Round(capsule, S(14)))
+        {
+            using (var cb = new SolidBrush(Color.FromArgb(22, 255, 255, 255))) g.FillPath(cb, cp);
+            using (var ce = new Pen(Color.FromArgb(30, 255, 255, 255), 1f)) g.DrawPath(ce, cp);
+        }
+        if (hours.Count > 0)
+            using (var np = Round(new RectangleF(x + S(2), rowY - S(3), colW - S(4), S(56)), S(11)))
+            using (var nb = new SolidBrush(Color.FromArgb(34, Theme.Gold)))
+                g.FillPath(nb, np);
         using (var f = F(11, FontStyle.Bold))
             for (int i = 0; i < hours.Count; i++)
             {
                 var col = new RectangleF(x + i * colW, rowY, colW, S(16));
                 Label(g, hours[i], f, i == 0 ? Theme.Gold : Theme.Dim, col, StringAlignment.Center);
-                WeatherArt.Icon(g, hourCodes[i], hourDay[i], new RectangleF(col.X + colW / 2 - S(10), col.Y + S(18), S(20), S(20)));
-                Label(g, Math.Round(hourTemps[i]) + "°", f, Color.White, new RectangleF(col.X, col.Y + S(41), colW, S(16)), StringAlignment.Center);
+                WeatherArt.Icon(g, hourCodes[i], hourDay[i], new RectangleF(col.X + colW / 2 - S(10), col.Y + S(17), S(20), S(20)));
+                Label(g, Math.Round(hourTemps[i]) + "°", f, Color.White, new RectangleF(col.X, col.Y + S(38), colW, S(16)), StringAlignment.Center);
             }
     }
 }
