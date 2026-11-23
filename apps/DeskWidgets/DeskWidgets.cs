@@ -1712,6 +1712,12 @@ static class Program
 {
     static readonly List<Widget> widgets = new List<Widget>();
 
+    static bool ShowPhotos
+    {
+        get { return Settings.Get("photos", Scene.Mode == "crew" ? "0" : "1") == "1"; }
+        set { Settings.Set("photos", value ? "1" : "0"); }
+    }
+
     static void Build()
     {
         foreach (var w in widgets) w.Close();
@@ -1719,23 +1725,47 @@ static class Program
         float sc = Native.GetDpiForSystem() / 96f;
         int screenW = (int)(Screen.PrimaryScreen.Bounds.Width / sc);
         int U = Theme.Unit, G = Theme.Gap;
+        int screenH = (int)(Screen.PrimaryScreen.Bounds.Height / sc);
         int left = 24, top = 24;
         int row = U + G;
-        int centre = left + Theme.Medium + G;
-        int right = screenW - 24 - U;
+        int right = screenW - 24 - U;              // outer right column
+        int right2 = right - U - G;                // inner right column (medium widgets start here)
+        int bottom = screenH - 24 - U;             // bottom row
 
-        // Left: folders, to-do + calendar, music. Centre: photos and weather, leaving the wallpaper's ship clear.
-        widgets.Add(new FoldersWidget(left, top));
-        widgets.Add(new TodoWidget(left, top + row));
-        widgets.Add(new CalendarWidget(left + U + G, top + row));
-        widgets.Add(new MusicWidget(left, top + row * 2));
-        widgets.Add(new StripWidget("strip", new[] { "photo2.jpg", "photo3.jpg", "photo4.jpg" }, centre, top));
-        widgets.Add(new WeatherWidget(centre, top + row));
-        // Right column: hat photo, clock, rotating photo, system
-        widgets.Add(new PhotoWidget("photo-top", "photo1.jpg", false, right, top));
-        widgets.Add(new ClockWidget(right, top + row));
-        widgets.Add(new PhotoWidget("photo-bottom", "photo5.jpg", true, right, top + row * 2));
-        widgets.Add(new SystemWidget(right, top + row * 3));
+        if (Scene.Mode == "crew")
+        {
+            // Edges only, so the crew in the middle of the picture stays visible:
+            // sky top-right, figurehead/railing on the right, splashing water bottom-left.
+            widgets.Add(new FoldersWidget(right2, top));
+            widgets.Add(new WeatherWidget(right2, top + row));
+            widgets.Add(new ClockWidget(right, top + row * 2));
+            widgets.Add(new SystemWidget(right2, top + row * 3));
+            widgets.Add(new CalendarWidget(right, top + row * 3));
+            widgets.Add(new TodoWidget(left, bottom - row));
+            widgets.Add(new MusicWidget(left, bottom));
+        }
+        else
+        {
+            // Left: folders, to-do + calendar, music. Centre: photos and weather, leaving the wallpaper's ship clear.
+            int centre = left + Theme.Medium + G;
+            widgets.Add(new FoldersWidget(left, top));
+            widgets.Add(new TodoWidget(left, top + row));
+            widgets.Add(new CalendarWidget(left + U + G, top + row));
+            widgets.Add(new MusicWidget(left, top + row * 2));
+            widgets.Add(new WeatherWidget(centre, top + row));
+            widgets.Add(new ClockWidget(right, top + row));
+            widgets.Add(new SystemWidget(right, top + row * 3));
+        }
+
+        // Photo widgets: off by default with the crew picture (it already is the photo), on for the sunset scene.
+        if (ShowPhotos)
+        {
+            int px = Scene.Mode == "crew" ? left : left + Theme.Medium + G;
+            int py = Scene.Mode == "crew" ? top : top;
+            widgets.Add(new StripWidget("strip", new[] { "photo2.jpg", "photo3.jpg", "photo4.jpg" }, px, py));
+            widgets.Add(new PhotoWidget("photo-top", "photo1.jpg", false, right, top));
+            widgets.Add(new PhotoWidget("photo-bottom", "photo5.jpg", true, Scene.Mode == "crew" ? right2 : right, top + row * 2));
+        }
         foreach (var w in widgets) w.Show();
     }
 
@@ -1773,12 +1803,16 @@ static class Program
             var styles = new ToolStripMenuItem("Scene style");
             var crew = new ToolStripMenuItem("Straw Hat crew (your picture)") { Checked = Scene.Mode == "crew" };
             var sunset = new ToolStripMenuItem("Straw hat sunset") { Checked = Scene.Mode != "crew" };
-            crew.Click += (s, e) => { Scene.Mode = "crew"; crew.Checked = true; sunset.Checked = false; };
-            sunset.Click += (s, e) => { Scene.Mode = "sunset"; sunset.Checked = true; crew.Checked = false; };
+            crew.Click += (s, e) => { Scene.Mode = "crew"; crew.Checked = true; sunset.Checked = false; Settings.ClearPositions(); Build(); };
+            sunset.Click += (s, e) => { Scene.Mode = "sunset"; sunset.Checked = true; crew.Checked = false; Settings.ClearPositions(); Build(); };
             styles.DropDownItems.Add(crew);
             styles.DropDownItems.Add(sunset);
             foreach (ToolStripItem it in styles.DropDownItems) it.ForeColor = Theme.Text;
             menu.Items.Add(styles);
+            var photosItem = new ToolStripMenuItem("Show photo widgets") { CheckOnClick = true };
+            photosItem.CheckedChanged += (s, e) => { if (photosItem.Checked != ShowPhotos) { ShowPhotos = photosItem.Checked; Build(); } };
+            menu.Opening += (s, e) => photosItem.Checked = ShowPhotos;
+            menu.Items.Add(photosItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Close widgets", null, (s, e) => Application.Exit());
             foreach (ToolStripItem it in menu.Items) it.ForeColor = Theme.Text;
