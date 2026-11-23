@@ -17,15 +17,13 @@ using Microsoft.Win32;
 
 static class Theme
 {
-    // Rich plum-to-ink card tones
-    public static readonly Color CardTop = Color.FromArgb(240, 52, 36, 70);
-    public static readonly Color CardBottom = Color.FromArgb(240, 16, 12, 26);
-    public static readonly Color Gold = Color.FromArgb(244, 192, 62);
-    public static readonly Color Red = Color.FromArgb(222, 46, 56);
-    public static readonly Color Sea = Color.FromArgb(70, 130, 230);
+    public static readonly Color CardTop = Color.FromArgb(242, 36, 42, 59);
+    public static readonly Color CardBottom = Color.FromArgb(248, 14, 19, 31);
+    public static readonly Color Gold = Color.FromArgb(247, 205, 126);
+    public static readonly Color Red = Color.FromArgb(235, 102, 103);
+    public static readonly Color Sea = Color.FromArgb(122, 178, 231);
     public static readonly Color Text = Color.FromArgb(246, 242, 236);
-    public static readonly Color Dim = Color.FromArgb(160, 246, 242, 236);
-    public static readonly Color Faint = Color.FromArgb(90, 246, 242, 236);
+    public static readonly Color Dim = Color.FromArgb(200, 231, 234, 244);
     public const string Display = "Segoe UI Variable Display";
     public const string Body = "Segoe UI Variable Text";
     public const string Icons = "Segoe Fluent Icons";
@@ -43,13 +41,17 @@ static class Settings
     public static readonly string PhotoDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Widgets");
     static readonly Dictionary<string, string> values = new Dictionary<string, string>();
 
-    public static void Load()
+    public static void Load(bool readOnly = false)
     {
-        Directory.CreateDirectory(Dir);
-        Directory.CreateDirectory(PhotoDir);
-        if (!File.Exists(File_))
-            File.WriteAllText(File_, "# Weather location (change city name and coordinates, then right-click a widget > Reload)\r\ncity=Ahmedabad\r\nlat=23.0225\r\nlon=72.5714\r\n");
+        if (!readOnly)
+        {
+            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(PhotoDir);
+            if (!File.Exists(File_))
+                File.WriteAllText(File_, "# Weather location (change city name and coordinates, then right-click a widget > Reload)\r\ncity=Ahmedabad\r\nlat=23.0225\r\nlon=72.5714\r\n");
+        }
         values.Clear();
+        if (!File.Exists(File_)) return;
         foreach (string line in File.ReadAllLines(File_))
         {
             int eq = line.IndexOf('=');
@@ -155,25 +157,34 @@ abstract class Widget : Form
     byte alpha;
     double hover, hoverTarget;
     readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 16 };
+    readonly List<System.Windows.Forms.Timer> timers = new List<System.Windows.Forms.Timer>();
     public static ContextMenuStrip SharedMenu;
     public static bool SuppressMenu; // set by a widget that used a right-click itself
+    public static bool Preview;
+    public static float LayoutScale = 1f;
 
     protected Widget(string id, int w, int h, int x, int y)
     {
         Id = id;
-        Sc = Native.GetDpiForSystem() / 96f;
+        Sc = LayoutScale;
         Pad = (int)(16 * Sc);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         Size = new Size((int)(w * Sc) + 2 * Pad, (int)(h * Sc) + 2 * Pad);
-        Point p = new Point((int)(x * Sc) - Pad, (int)(y * Sc) - Pad);
+        Rectangle area = Screen.PrimaryScreen.WorkingArea;
+        Point p = new Point(area.Left + (int)(x * Sc) - Pad, area.Top + (int)(y * Sc) - Pad);
         string saved = Settings.Get("pos." + id, null);
         if (saved != null)
         {
             string[] xy = saved.Split(',');
             int sx, sy;
-            if (xy.Length == 2 && int.TryParse(xy[0], out sx) && int.TryParse(xy[1], out sy)) p = new Point(sx, sy);
+            if (xy.Length == 2 && int.TryParse(xy[0], out sx) && int.TryParse(xy[1], out sy))
+            {
+                var card = new Rectangle(sx + Pad, sy + Pad, Width - 2 * Pad, Height - 2 * Pad);
+                foreach (Screen screen in Screen.AllScreens)
+                    if (screen.WorkingArea.Contains(card)) { p = new Point(sx, sy); break; }
+            }
         }
         Location = p;
         ContextMenuStrip = SharedMenu;
@@ -257,9 +268,8 @@ abstract class Widget : Form
 
     protected Font F(float size, FontStyle style) { return new Font(Theme.Body, size * Sc, style, GraphicsUnit.Pixel); }
     protected Font D(float size, FontStyle style) { return new Font(Theme.Display, size * Sc, style, GraphicsUnit.Pixel); }
-    protected float Radius { get { return S(22); } }
+    protected float Radius { get { return S(18); } }
 
-    // Card material: soft vertical gradient, a hairline inner edge and a faint top highlight.
     // Fine film grain, tiled over every card: gives the flat gradients a printed, premium feel.
     static TextureBrush grain;
     static TextureBrush Grain
@@ -283,10 +293,7 @@ abstract class Widget : Form
     // Champagne gold for edges and headings.
     public static readonly Color ChampagneHi = Color.FromArgb(255, 248, 222, 160), ChampagneLo = Color.FromArgb(255, 196, 146, 58);
 
-    // Rich card material: three-tone gradient, a warm glow from the top-left, film grain,
-    // a champagne-gold hairline (bright at the top, fading down) and a soft inner top highlight.
-    // The card material is the same every frame, so it is painted once per size/colour and reused
-    // (the clock redraws 10 times a second; repainting grain and glow each time cost ~8% CPU).
+    // Cache the gradient, grain and rim by size and colour.
     readonly Dictionary<string, Bitmap> cardCache = new Dictionary<string, Bitmap>();
     Bitmap shadowCache;
 
@@ -326,7 +333,7 @@ abstract class Widget : Form
             {
                 var gr = new RectangleF(card.X - card.Width * 0.35f, card.Y - card.Height * 0.6f, card.Width * 1.1f, card.Height * 1.3f);
                 glowPath.AddEllipse(gr);
-                using (var glow = new PathGradientBrush(glowPath) { CenterColor = Color.FromArgb(30, 255, 196, 110), SurroundColors = new[] { Color.FromArgb(0, 255, 196, 110) } })
+                using (var glow = new PathGradientBrush(glowPath) { CenterColor = Color.FromArgb(17, 255, 196, 110), SurroundColors = new[] { Color.FromArgb(0, 255, 196, 110) } })
                     g.FillPath(glow, glowPath);
             }
             g.FillPath(Grain, path);
@@ -335,15 +342,9 @@ abstract class Widget : Form
             var inner = card;
             inner.Inflate(-0.75f, -0.75f);
             using (var ip = Round(inner, Radius - 0.75f))
-            using (var rim = new LinearGradientBrush(card, Color.FromArgb(150, ChampagneHi), Color.FromArgb(18, ChampagneLo), 90f))
-            using (var pen = new Pen(rim, 1.2f))
+            using (var rim = new LinearGradientBrush(card, Color.FromArgb(78, ChampagneHi), Color.FromArgb(25, Theme.Sea), 90f))
+            using (var pen = new Pen(rim, Math.Max(1f, S(0.8f))))
                 g.DrawPath(pen, ip);
-            var sheen = new RectangleF(card.X + Radius, card.Y + 1.5f, card.Width - 2 * Radius, 1.2f);
-            using (var sb = new LinearGradientBrush(new RectangleF(sheen.X - 1, sheen.Y, sheen.Width + 2, sheen.Height), Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 0f))
-            {
-                sb.InterpolationColors = new ColorBlend(3) { Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(70, 255, 245, 225), Color.FromArgb(0, 255, 255, 255) }, Positions = new[] { 0f, 0.5f, 1f } };
-                g.FillRectangle(sb, sheen);
-            }
         }
     }
 
@@ -383,11 +384,41 @@ abstract class Widget : Form
         if (memDC != IntPtr.Zero) { Native.SelectObject(memDC, oldObj); Native.DeleteObject(dib); Native.DeleteDC(memDC); memDC = IntPtr.Zero; }
     }
 
-    protected override void Dispose(bool disposing) { FreeSurface(); anim.Dispose(); base.Dispose(disposing); }
+    protected void Repeat(int interval, Action tick)
+    {
+        if (Preview) return;
+        var timer = new System.Windows.Forms.Timer { Interval = interval };
+        timer.Tick += (s, e) => tick();
+        timers.Add(timer);
+        timer.Start();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            foreach (var timer in timers) timer.Dispose();
+            anim.Dispose();
+            foreach (var art in cardCache.Values) art.Dispose();
+            if (shadowCache != null) shadowCache.Dispose();
+            FreeSurface();
+        }
+        base.Dispose(disposing);
+    }
 
     public void Redraw()
     {
         if (!IsHandleCreated) return;
+        PaintFrame();
+        var size = new Native.SIZE { cx = Width, cy = Height };
+        var src = new Native.POINT();
+        var pos = new Native.POINT { X = Left, Y = Top };
+        var blend = new Native.BLEND { Op = 0, Flags = 0, Alpha = alpha, Format = 1 };
+        Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref pos, ref size, memDC, ref src, 0, ref blend, 2);
+    }
+
+    void PaintFrame()
+    {
         EnsureSurface();
         using (var g = Graphics.FromImage(frame))
         {
@@ -427,11 +458,6 @@ abstract class Widget : Form
             }
             Draw(g, card);
         }
-        var size = new Native.SIZE { cx = Width, cy = Height };
-        var src = new Native.POINT();
-        var pos = new Native.POINT { X = Left, Y = Top };
-        var blend = new Native.BLEND { Op = 0, Flags = 0, Alpha = alpha, Format = 1 };
-        Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref pos, ref size, memDC, ref src, 0, ref blend, 2);
     }
 
     protected static void DrawCover(Graphics g, Image img, RectangleF dst, float radius, float opacity)
@@ -472,18 +498,14 @@ abstract class Widget : Form
 
     protected void Label(Graphics g, string s, Font f, Color c, RectangleF r, StringAlignment h)
     {
-        // Gold headings get a champagne gradient instead of flat yellow.
-        Brush b = c == Theme.Gold
-            ? (Brush)new LinearGradientBrush(new RectangleF(r.X, r.Y, r.Width, Math.Max(2, f.Height)), ChampagneHi, ChampagneLo, 90f)
-            : new SolidBrush(c);
-        using (b)
+        using (var b = new SolidBrush(c))
         using (var sf = new StringFormat { Alignment = h, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString(s, f, b, r, sf);
     }
 
     public virtual void Reload() { Redraw(); }
 
-    public Bitmap Snapshot() { alpha = 255; Redraw(); return frame == null ? null : new Bitmap(frame); }
+    public Bitmap Snapshot() { PaintFrame(); return new Bitmap(frame); }
 }
 
 // ---------------------------------------------------------------- photos
@@ -503,13 +525,8 @@ class PhotoWidget : Widget
         this.file = file;
         this.rotate = rotate;
         img = LoadPhoto(Path.Combine(Settings.PhotoDir, file));
-        fadeTimer.Tick += (s, e) => { fade = Math.Min(1, fade + 0.06); Redraw(); if (fade >= 1) { fadeTimer.Stop(); previous = null; } };
-        if (rotate)
-        {
-            var t = new System.Windows.Forms.Timer { Interval = 20 * 60 * 1000 };
-            t.Tick += (s, e) => Next();
-            t.Start();
-        }
+        fadeTimer.Tick += (s, e) => { fade = Math.Min(1, fade + 0.06); Redraw(); if (fade >= 1) { fadeTimer.Stop(); if (previous != null) previous.Dispose(); previous = null; } };
+        if (rotate) Repeat(20 * 60 * 1000, Next);
     }
 
     void Next()
@@ -531,7 +548,23 @@ class PhotoWidget : Widget
         DrawCover(g, img, card, Radius, (float)fade);
     }
 
-    public override void Reload() { img = LoadPhoto(Path.Combine(Settings.PhotoDir, file)); Redraw(); }
+    public override void Reload()
+    {
+        if (img != null) img.Dispose();
+        img = LoadPhoto(Path.Combine(Settings.PhotoDir, file));
+        Redraw();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            fadeTimer.Dispose();
+            if (img != null) img.Dispose();
+            if (previous != null) previous.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 }
 
 class StripWidget : Widget
@@ -539,7 +572,8 @@ class StripWidget : Widget
     readonly string[] files;
     Image[] imgs;
     public StripWidget(string id, string[] files, int x, int y) : base(id, Theme.Medium, Theme.Unit, x, y) { this.files = files; LoadAll(); }
-    void LoadAll() { imgs = new Image[files.Length]; for (int i = 0; i < files.Length; i++) imgs[i] = LoadPhoto(Path.Combine(Settings.PhotoDir, files[i])); }
+    void ReleaseImages() { if (imgs != null) foreach (var img in imgs) if (img != null) img.Dispose(); }
+    void LoadAll() { ReleaseImages(); imgs = new Image[files.Length]; for (int i = 0; i < files.Length; i++) imgs[i] = LoadPhoto(Path.Combine(Settings.PhotoDir, files[i])); }
     protected override void Draw(Graphics g, RectangleF card)
     {
         FillCard(g, card);
@@ -549,6 +583,8 @@ class StripWidget : Widget
             DrawCover(g, imgs[i], new RectangleF(card.X + inner + i * (w + gap), card.Y + inner, w, card.Height - 2 * inner), S(14), 1);
     }
     public override void Reload() { LoadAll(); Redraw(); }
+
+    protected override void Dispose(bool disposing) { if (disposing) ReleaseImages(); base.Dispose(disposing); }
 }
 
 // ---------------------------------------------------------------- clock
@@ -557,61 +593,27 @@ class ClockWidget : Widget
 {
     public ClockWidget(int x, int y) : base("clock", Theme.Unit, Theme.Unit, x, y)
     {
-        // 10 redraws a second so the second hand sweeps smoothly instead of ticking
-        var t = new System.Windows.Forms.Timer { Interval = 100 };
-        t.Tick += (s, e) => Redraw();
-        t.Start();
+        int minute = DateTime.Now.Minute;
+        Repeat(1000, () => { if (DateTime.Now.Minute != minute) { minute = DateTime.Now.Minute; Redraw(); } });
     }
 
     protected override void Draw(Graphics g, RectangleF card)
     {
         DateTime now = DateTime.Now;
-        bool night = now.Hour >= 19 || now.Hour < 6;
         FillCard(g, card);
-        float m = S(12);
-        var face = new RectangleF(card.X + m, card.Y + m, card.Width - 2 * m, card.Height - 2 * m);
-        Color faceCol = night ? Color.FromArgb(255, 30, 26, 44) : Color.FromArgb(255, 250, 248, 244);
-        Color ink = night ? Color.FromArgb(240, 240, 236) : Color.FromArgb(24, 22, 28);
-        using (var b = new SolidBrush(faceCol)) g.FillEllipse(b, face);
-        PointF c = new PointF(face.X + face.Width / 2, face.Y + face.Height / 2);
-        float r = face.Width / 2;
+        float x = card.X + S(15), w = card.Width - S(30);
+        string time = now.ToShortTimeString();
+        string period = now.ToString("tt");
+        bool showPeriod = period.Length > 0 && time.EndsWith(period, StringComparison.CurrentCulture);
+        if (showPeriod) time = time.Substring(0, time.Length - period.Length).TrimEnd();
 
-        for (int i = 0; i < 60; i++)
-        {
-            double a = i * Math.PI / 30;
-            bool hour = i % 5 == 0;
-            float r1 = r * (hour ? 0.84f : 0.90f), r2 = r * 0.94f;
-            using (var p = new Pen(Color.FromArgb(hour ? 200 : 70, ink), S(hour ? 2.2f : 1f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                if (hour && i % 15 == 0) continue; else g.DrawLine(p, c.X + (float)Math.Sin(a) * r1, c.Y - (float)Math.Cos(a) * r1, c.X + (float)Math.Sin(a) * r2, c.Y - (float)Math.Cos(a) * r2);
-        }
-        using (var f = D(15, FontStyle.Bold))
-        using (var b = new SolidBrush(ink))
-        using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-        {
-            string[] nums = { "12", "3", "6", "9" };
-            for (int i = 0; i < 4; i++)
-            {
-                double a = i * Math.PI / 2;
-                g.DrawString(nums[i], f, b, c.X + (float)Math.Sin(a) * r * 0.76f, c.Y - (float)Math.Cos(a) * r * 0.76f + S(1), sf);
-            }
-        }
-        using (var f = F(8.5f, FontStyle.Bold))
-        using (var b = new SolidBrush(Color.FromArgb(150, ink)))
-        using (var sf = new StringFormat { Alignment = StringAlignment.Center })
-            g.DrawString(Settings.Get("city", "Ahmedabad").ToUpper().Substring(0, 3), f, b, c.X, c.Y + r * 0.30f, sf);
-
-        Hand(g, c, r * 0.50f, (now.Hour % 12 + now.Minute / 60.0) * 30, S(5f), ink);
-        Hand(g, c, r * 0.74f, (now.Minute + now.Second / 60.0) * 6, S(3.4f), ink);
-        Hand(g, c, r * 0.84f, (now.Second + now.Millisecond / 1000.0) * 6, S(1.4f), Theme.Red);
-        using (var b = new SolidBrush(Theme.Red)) g.FillEllipse(b, c.X - S(4), c.Y - S(4), S(8), S(8));
-        using (var b = new SolidBrush(faceCol)) g.FillEllipse(b, c.X - S(1.6f), c.Y - S(1.6f), S(3.2f), S(3.2f));
-    }
-
-    static void Hand(Graphics g, PointF c, float len, double deg, float width, Color col)
-    {
-        double a = deg * Math.PI / 180;
-        using (var p = new Pen(col, width) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-            g.DrawLine(p, c.X - (float)Math.Sin(a) * len * 0.14f, c.Y + (float)Math.Cos(a) * len * 0.14f, c.X + (float)Math.Sin(a) * len, c.Y - (float)Math.Cos(a) * len);
+        using (var f = F(11, FontStyle.Bold)) Label(g, "LOCAL TIME", f, Theme.Gold, new RectangleF(x, card.Y + S(15), w, S(18)), StringAlignment.Near);
+        using (var f = D(time.Length > 5 ? 30 : 40, FontStyle.Bold)) Label(g, time, f, Theme.Text, new RectangleF(x - S(2), card.Y + S(36), w + S(4), S(52)), StringAlignment.Near);
+        if (showPeriod)
+            using (var f = F(12, FontStyle.Bold)) Label(g, period, f, Theme.Gold, new RectangleF(x, card.Y + S(91), w, S(19)), StringAlignment.Near);
+        using (var line = new Pen(Color.FromArgb(40, Theme.Text), Math.Max(1f, S(1))))
+            g.DrawLine(line, x, card.Bottom - S(44), x + w, card.Bottom - S(44));
+        using (var f = F(12, FontStyle.Regular)) Label(g, now.ToString("ddd, d MMM"), f, Theme.Dim, new RectangleF(x, card.Bottom - S(34), w, S(20)), StringAlignment.Near);
     }
 }
 
@@ -625,10 +627,8 @@ class MusicWidget : Widget
 
     public MusicWidget(int x, int y) : base("music", Theme.Medium, Theme.Unit, x, y)
     {
-        var t = new System.Windows.Forms.Timer { Interval = 2000 };
-        t.Tick += (s, e) => { if (Poll()) Redraw(); };
-        t.Start();
-        Poll();
+        Repeat(2000, () => { if (Poll()) Redraw(); });
+        if (!Preview) Poll();
     }
 
     bool Poll()
@@ -652,12 +652,12 @@ class MusicWidget : Widget
     {
         FillCard(g, card);
         float m = S(14);
-        var art = new RectangleF(card.X + m, card.Y + m, card.Height - 2 * m, card.Height - 2 * m);
+        var art = new RectangleF(card.X + m, card.Y + m, S(100), card.Height - 2 * m);
         using (var path = Round(art, S(14)))
-        using (var b = new LinearGradientBrush(art, Theme.Gold, Theme.Red, 55f))
+        using (var b = new LinearGradientBrush(art, Color.FromArgb(74, 65, 94), Color.FromArgb(36, 33, 55), 55f))
             g.FillPath(b, path);
         using (var f = new Font(Theme.Icons, S(40), GraphicsUnit.Pixel))
-        using (var b = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
+        using (var b = new SolidBrush(Theme.Gold))
         using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             g.DrawString("", f, b, art, sf);
 
@@ -666,12 +666,7 @@ class MusicWidget : Widget
         using (var f = D(16, FontStyle.Bold)) Label(g, playing ? title : "Nothing playing", f, Theme.Text, new RectangleF(tx, art.Y + S(18), tw, S(24)), StringAlignment.Near);
         using (var f = F(12, FontStyle.Regular)) Label(g, playing ? artist : "Open Spotify or any player", f, Theme.Dim, new RectangleF(tx, art.Y + S(42), tw, S(18)), StringAlignment.Near);
 
-        // track line (decorative) and controls
-        float ly = art.Y + S(72);
-        using (var b = new SolidBrush(Theme.Faint)) g.FillRectangle(b, tx, ly, tw, S(3));
-        using (var b = new SolidBrush(Theme.Gold)) g.FillRectangle(b, tx, ly, playing ? tw * 0.35f : 0, S(3));
-
-        float bs = S(34), cy = art.Bottom - bs / 2, cx = tx + tw / 2;
+        float bs = S(38), cy = art.Bottom - bs / 2, cx = tx + S(74);
         prev = new RectangleF(cx - bs * 1.9f, cy - bs / 2, bs, bs);
         play = new RectangleF(cx - bs / 2, cy - bs / 2, bs, bs);
         next = new RectangleF(cx + bs * 0.9f, cy - bs / 2, bs, bs);
@@ -779,15 +774,6 @@ static class WeatherArt
         }
     }
 
-    // Card colours follow the sky: day blue, golden hour, night navy, grey when it rains.
-    public static void Sky(int code, bool day, out Color top, out Color bottom)
-    {
-        int h = DateTime.Now.Hour;
-        if (code >= 51) { top = Color.FromArgb(240, 74, 84, 110); bottom = Color.FromArgb(240, 108, 120, 146); return; }
-        if (!day) { top = Color.FromArgb(240, 18, 22, 58); bottom = Color.FromArgb(240, 48, 44, 102); return; }
-        if (h >= 17 || h < 8) { top = Color.FromArgb(240, 58, 44, 120); bottom = Color.FromArgb(240, 222, 100, 70); return; }
-        top = Color.FromArgb(240, 36, 98, 196); bottom = Color.FromArgb(240, 92, 160, 236);
-    }
 }
 
 class WeatherWidget : Widget
@@ -801,12 +787,17 @@ class WeatherWidget : Widget
     readonly List<double> hourTemps = new List<double>();
     readonly List<int> hourCodes = new List<int>();
     readonly List<bool> hourDay = new List<bool>();
+    int request;
 
     public WeatherWidget(int x, int y) : base("weather", Theme.Medium, Theme.Unit, x, y)
     {
-        var t = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 };
-        t.Tick += (s, e) => Fetch();
-        t.Start();
+        if (Preview) status = "Forecast unavailable in preview";
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Repeat(30 * 60 * 1000, Fetch);
         Fetch();
     }
 
@@ -814,6 +805,7 @@ class WeatherWidget : Widget
 
     void Fetch()
     {
+        int version = ++request;
         string lat = Settings.Get("lat", "23.0225"), lon = Settings.Get("lon", "72.5714");
         ThreadPool.QueueUserWorkItem(_ =>
         {
@@ -833,10 +825,11 @@ class WeatherWidget : Widget
                 var temps = (object[])hourly["temperature_2m"];
                 var codes = (object[])hourly["weather_code"];
                 var days = (object[])hourly["is_day"];
-                string nowKey = DateTime.Now.ToString("yyyy-MM-ddTHH");
+                DateTime now = DateTime.Parse((string)cur["time"], System.Globalization.CultureInfo.InvariantCulture);
+                string nowKey = now.ToString("yyyy-MM-ddTHH", System.Globalization.CultureInfo.InvariantCulture);
                 int start = 0;
                 for (int i = 0; i < times.Length; i++) if (((string)times[i]).StartsWith(nowKey)) { start = i; break; }
-                BeginInvoke((Action)(() =>
+                Publish(version, () =>
                 {
                     temp = Convert.ToDouble(cur["temperature_2m"]);
                     code = Convert.ToInt32(cur["weather_code"]);
@@ -846,7 +839,7 @@ class WeatherWidget : Widget
                     // next sun event: today's sunrise or sunset, else tomorrow's sunrise
                     var rises = (object[])daily["sunrise"];
                     var sets = (object[])daily["sunset"];
-                    DateTime now = DateTime.Now, rise0 = DateTime.Parse((string)rises[0]), set0 = DateTime.Parse((string)sets[0]);
+                    DateTime rise0 = DateTime.Parse((string)rises[0]), set0 = DateTime.Parse((string)sets[0]);
                     if (now < rise0) sun = "Sunrise " + rise0.ToString("h:mm tt").ToLower();
                     else if (now < set0) sun = "Sunset " + set0.ToString("h:mm tt").ToLower();
                     else sun = "Sunrise " + DateTime.Parse((string)rises[1]).ToString("h:mm tt").ToLower();
@@ -861,26 +854,31 @@ class WeatherWidget : Widget
                     }
                     status = null;
                     Redraw();
-                }));
+                });
             }
             catch
             {
-                BeginInvoke((Action)(() => { status = "Weather unavailable"; Redraw(); }));
+                Publish(version, () => { status = "Weather unavailable"; Redraw(); });
             }
         });
     }
 
+    void Publish(int version, Action apply)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { BeginInvoke((Action)(() => { if (!IsDisposed && version == request) apply(); })); }
+        catch (InvalidOperationException) { }
+    }
+
     protected override void Draw(Graphics g, RectangleF card)
     {
-        Color top, bottom;
-        WeatherArt.Sky(code, day, out top, out bottom);
-        FillCard(g, card, top, bottom);
+        FillCard(g, card);
 
         float x = card.X + S(18), y = card.Y + S(14), w = card.Width - S(36);
-        using (var f = D(14, FontStyle.Bold)) Label(g, Settings.Get("city", "Ahmedabad") + "  ➤", f, Color.White, new RectangleF(x, y, w * 0.6f, S(20)), StringAlignment.Near);
+        using (var f = D(14, FontStyle.Bold)) Label(g, Settings.Get("city", "Ahmedabad"), f, Theme.Text, new RectangleF(x, y, w * 0.72f, S(20)), StringAlignment.Near);
         if (status != null)
         {
-            using (var f = F(13, FontStyle.Regular)) Label(g, status, f, Color.FromArgb(220, 255, 255, 255), new RectangleF(x, y + S(40), w, S(20)), StringAlignment.Near);
+            using (var f = F(13, FontStyle.Regular)) Label(g, status, f, Theme.Dim, new RectangleF(x, y + S(36), w, S(20)), StringAlignment.Near);
             return;
         }
         using (var f = new Font("Segoe UI Variable Display Light", S(42), GraphicsUnit.Pixel))
@@ -888,7 +886,7 @@ class WeatherWidget : Widget
 
         WeatherArt.Icon(g, code, day, new RectangleF(card.Right - S(18) - S(26), y - S(2), S(26), S(26)));
         using (var f = F(13, FontStyle.Bold)) Label(g, WeatherArt.Describe(code), f, Color.White, new RectangleF(x, y + S(28), w, S(18)), StringAlignment.Far);
-        using (var f = F(12, FontStyle.Regular)) Label(g, "H:" + Math.Round(hi) + "°  L:" + Math.Round(lo) + "°", f, Color.FromArgb(220, 255, 255, 255), new RectangleF(x, y + S(46), w, S(18)), StringAlignment.Far);
+        using (var f = F(12, FontStyle.Regular)) Label(g, "High " + Math.Round(hi) + "°   Low " + Math.Round(lo) + "°", f, Theme.Dim, new RectangleF(x, y + S(46), w, S(18)), StringAlignment.Far);
         using (var f = F(10.5f, FontStyle.Regular)) Label(g, sun, f, Color.FromArgb(190, 255, 255, 255), new RectangleF(x, y + S(63), w, S(16)), StringAlignment.Far);
 
         float rowY = card.Bottom - S(66), colW = w / Math.Max(1, hours.Count);
@@ -897,7 +895,7 @@ class WeatherWidget : Widget
             for (int i = 0; i < hours.Count; i++)
             {
                 var col = new RectangleF(x + i * colW, rowY, colW, S(16));
-                Label(g, hours[i], f, Color.FromArgb(220, 255, 255, 255), col, StringAlignment.Center);
+                Label(g, hours[i], f, i == 0 ? Theme.Gold : Theme.Dim, col, StringAlignment.Center);
                 WeatherArt.Icon(g, hourCodes[i], hourDay[i], new RectangleF(col.X + colW / 2 - S(10), col.Y + S(18), S(20), S(20)));
                 Label(g, Math.Round(hourTemps[i]) + "°", f, Color.White, new RectangleF(col.X, col.Y + S(41), colW, S(16)), StringAlignment.Center);
             }
@@ -920,6 +918,7 @@ class FoldersWidget : Widget
 
     void LoadIcons()
     {
+        foreach (var img in icons.Values) img.Dispose();
         icons.Clear();
         string iconDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), @"Wallpapers\FolderIcons");
         var map = new Dictionary<string, string>();
@@ -946,13 +945,15 @@ class FoldersWidget : Widget
     {
         FillCard(g, card);
         cells.Clear();
-        float padX = S(10), padY = S(10);
-        float cw = (card.Width - 2 * padX) / 4f, ch = (card.Height - 2 * padY) / 2f;
-        float icon = S(40);
-        using (var f = F(10, FontStyle.Bold))
+        float padX = S(10), gridTop = card.Y + S(33);
+        float cw = (card.Width - 2 * padX) / 4f, ch = (card.Bottom - gridTop - S(9)) / 2f;
+        float icon = S(36);
+        using (var f = F(11, FontStyle.Bold)) Label(g, "FOLDERS", f, Theme.Gold, new RectangleF(card.X + S(15), card.Y + S(13), card.Width - S(30), S(17)), StringAlignment.Near);
+        using (var f = F(10.5f, FontStyle.Bold))
+        using (var fallback = new Font(Theme.Icons, S(26), GraphicsUnit.Pixel))
             for (int i = 0; i < Names.Length; i++)
             {
-                var cell = new RectangleF(card.X + padX + (i % 4) * cw, card.Y + padY + (i / 4) * ch, cw, ch);
+                var cell = new RectangleF(card.X + padX + (i % 4) * cw, gridTop + (i / 4) * ch, cw, ch);
                 cells.Add(cell);
                 if (i == hovered)
                 {
@@ -963,10 +964,17 @@ class FoldersWidget : Widget
                         g.FillPath(b, path);
                 }
                 Image img;
-                var ir = new RectangleF(cell.X + (cell.Width - icon) / 2, cell.Y + S(8), icon, icon);
+                var ir = new RectangleF(cell.X + (cell.Width - icon) / 2, cell.Y + S(3), icon, icon);
                 if (icons.TryGetValue(Names[i], out img)) g.DrawImage(img, ir);
-                Label(g, Names[i], f, Theme.Text, new RectangleF(cell.X, ir.Bottom + S(2), cell.Width, S(16)), StringAlignment.Center);
+                else Label(g, "\uE8B7", fallback, Theme.Sea, ir, StringAlignment.Center);
+                Label(g, Names[i] == "System & Games" ? "System" : Names[i], f, Theme.Text, new RectangleF(cell.X, ir.Bottom + S(2), cell.Width, S(16)), StringAlignment.Center);
             }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) foreach (var img in icons.Values) img.Dispose();
+        base.Dispose(disposing);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -1032,10 +1040,8 @@ class CalendarWidget : Widget
 {
     public CalendarWidget(int x, int y) : base("calendar", Theme.Unit, Theme.Unit, x, y)
     {
-        var t = new System.Windows.Forms.Timer { Interval = 60 * 1000 };
-        int day = DateTime.Now.Day;
-        t.Tick += (s, e) => { if (DateTime.Now.Day != day) { day = DateTime.Now.Day; Redraw(); } };
-        t.Start();
+        DateTime day = DateTime.Today;
+        Repeat(60 * 1000, () => { if (DateTime.Today != day) { day = DateTime.Today; Redraw(); } });
     }
 
     protected override void Draw(Graphics g, RectangleF card)
@@ -1043,7 +1049,7 @@ class CalendarWidget : Widget
         FillCard(g, card);
         DateTime now = DateTime.Now;
         float x = card.X + S(12), y = card.Y + S(12), w = card.Width - S(24);
-        using (var f = F(11, FontStyle.Bold)) Label(g, now.ToString("MMMM").ToUpper(), f, Theme.Red, new RectangleF(x + S(2), y, w, S(16)), StringAlignment.Near);
+        using (var f = F(11, FontStyle.Bold)) Label(g, now.ToString("MMMM").ToUpper(), f, Theme.Gold, new RectangleF(x + S(2), y, w, S(16)), StringAlignment.Near);
         float cw = w / 7f, rowH = S(17);
         string[] heads = { "M", "T", "W", "T", "F", "S", "S" };
         using (var f = F(9.5f, FontStyle.Bold))
@@ -1058,8 +1064,8 @@ class CalendarWidget : Widget
                 float cx = x + (cell % 7) * cw, cy = y + S(38) + (cell / 7) * rowH;
                 bool today = d == now.Day;
                 if (today)
-                    using (var b = new SolidBrush(Theme.Red)) g.FillEllipse(b, cx + cw / 2 - S(8.5f), cy - S(1), S(17), S(17));
-                Label(g, d.ToString(), f, today ? Color.White : (cell % 7 >= 5 ? Theme.Dim : Theme.Text), new RectangleF(cx, cy, cw, rowH), StringAlignment.Center);
+                    using (var b = new SolidBrush(Theme.Gold)) g.FillEllipse(b, cx + cw / 2 - S(8.5f), cy - S(1), S(17), S(17));
+                Label(g, d.ToString(), f, today ? Theme.CardBottom : (cell % 7 >= 5 ? Theme.Dim : Theme.Text), new RectangleF(cx, cy, cw, rowH), StringAlignment.Center);
             }
     }
 }
@@ -1075,9 +1081,7 @@ class SystemWidget : Widget
     public SystemWidget(int x, int y) : base("system", Theme.Unit, Theme.Unit, x, y)
     {
         Sample();
-        var t = new System.Windows.Forms.Timer { Interval = 2000 };
-        t.Tick += (s, e) => { Sample(); Redraw(); };
-        t.Start();
+        Repeat(3000, () => { Sample(); Redraw(); });
     }
 
     void Sample()
@@ -1129,7 +1133,7 @@ class TodoWidget : Widget
     void LoadItems()
     {
         items.Clear();
-        if (!File.Exists(Settings.TodoFile)) File.WriteAllLines(Settings.TodoFile, new[] { "0|Plan the weekend", "0|Call home" });
+        if (Preview || !File.Exists(Settings.TodoFile)) return;
         foreach (string line in File.ReadAllLines(Settings.TodoFile))
         {
             int bar = line.IndexOf('|');
@@ -1161,9 +1165,9 @@ class TodoWidget : Widget
         FillCard(g, card);
         float x = card.X + S(14), y = card.Y + S(12), w = card.Width - S(28);
         int open = items.FindAll(i => !i.Done).Count;
-        using (var f = F(11, FontStyle.Bold)) Label(g, "TODAY", f, Theme.Gold, new RectangleF(x, y, w, S(16)), StringAlignment.Near);
-        using (var f = D(22, FontStyle.Bold)) Label(g, open.ToString(), f, Theme.Text, new RectangleF(x, y + S(14), w, S(28)), StringAlignment.Near);
-        plus = new RectangleF(card.Right - S(36), y, S(24), S(24));
+        using (var f = F(11, FontStyle.Bold)) Label(g, "TO-DO", f, Theme.Gold, new RectangleF(x, y, w, S(16)), StringAlignment.Near);
+        using (var f = D(20, FontStyle.Bold)) Label(g, open + " open", f, Theme.Text, new RectangleF(x, y + S(17), w - S(28), S(28)), StringAlignment.Near);
+        plus = new RectangleF(card.Right - S(43), y, S(31), S(31));
         using (var b = new SolidBrush(Color.FromArgb(46, 255, 255, 255))) g.FillEllipse(b, plus);
         using (var f = new Font(Theme.Icons, S(11), GraphicsUnit.Pixel))
         using (var b = new SolidBrush(Theme.Text))
@@ -1192,7 +1196,7 @@ class TodoWidget : Widget
                 shown++;
             }
         if (items.Count == 0)
-            using (var f = F(11.5f, FontStyle.Italic)) Label(g, "All clear — tap +", f, Theme.Dim, new RectangleF(x, rowY, w, S(18)), StringAlignment.Near);
+            using (var f = F(12, FontStyle.Regular)) Label(g, "No tasks yet", f, Theme.Dim, new RectangleF(x, rowY, w, S(18)), StringAlignment.Near);
         else if (shown < items.Count)
             using (var f = F(10.5f, FontStyle.Bold)) Label(g, "+" + (items.Count - shown) + " more", f, Theme.Dim, new RectangleF(x, card.Bottom - S(26), w, S(16)), StringAlignment.Near);
     }
@@ -1317,7 +1321,7 @@ class Sprite : Form
 
     public void Draw()
     {
-        if (!IsHandleCreated) return;
+        if (!Widget.Preview && !IsHandleCreated) return;
         EnsureSurface();
         using (var g = Graphics.FromImage(frame))
         {
@@ -1377,20 +1381,31 @@ static class Scene
 
     static void SetWallpaper(string path)
     {
-        if (!File.Exists(path)) return;
+        if (Widget.Preview || !File.Exists(path)) return;
         string current = (string)Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Desktop", "WallPaper", "");
         if (string.Equals(current, path, StringComparison.OrdinalIgnoreCase)) return;
         SystemParametersInfo(20, 0, path, 3);
     }
 
     // "crew" = the user's own Straw Hat crew picture brought to life; "sunset" = the original drawn sunset scene.
+    public static string PreviewMode;
+
     public static string Mode
     {
-        get { return Settings.Get("sceneMode", File.Exists(CrewWallpaper) ? "crew" : "sunset"); }
-        set { Stop(); Settings.Set("sceneMode", value); if (Enabled) Start(); }
+        get
+        {
+            string mode = PreviewMode ?? Settings.Get("sceneMode", File.Exists(CrewWallpaper) ? "crew" : "sunset");
+            return mode == "crew" && File.Exists(CrewWallpaper) ? "crew" : "sunset";
+        }
+        set { Stop(); Settings.Set("sceneMode", value); if (Enabled) Start(); else SetWallpaper(StillWallpaper); }
     }
 
-    public static string CurrentWallpaper { get { return Mode == "crew" && File.Exists(CrewWallpaper) ? CrewWallpaper : BaseWallpaper; } }
+    static string StillWallpaper { get { return Mode == "crew" ? CrewWallpaper : FullWallpaper; } }
+    public static string SnapshotWallpaper
+    {
+        get { return sprites.Count > 0 && Mode == "sunset" ? BaseWallpaper : StillWallpaper; }
+    }
+    public static bool HasCrewWallpaper { get { return File.Exists(CrewWallpaper); } }
 
     static readonly string CrewWallpaper = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), @"Wallpapers\Crew\crew-4K.jpg");
     static readonly List<Sprite> petals = new List<Sprite>(), twinkles = new List<Sprite>(), sprays = new List<Sprite>();
@@ -1491,7 +1506,8 @@ static class Scene
         sprites.AddRange(sprays);
         sprites.AddRange(gulls);
         sprites.AddRange(petals);
-        foreach (var s in sprites) { s.Show(); s.Draw(); }
+        foreach (var s in sprites) { if (!Widget.Preview) s.Show(); s.Draw(); }
+        if (Widget.Preview) return;
 
         timer = new System.Windows.Forms.Timer { Interval = 66 };
         timer.Tick += (s, e) => Tick();
@@ -1620,8 +1636,9 @@ static class Scene
         sprites.Add(ship);
         sprites.AddRange(gulls);
         sprites.Add(hat);
-        foreach (var s in sprites) s.Show();
+        if (!Widget.Preview) foreach (var s in sprites) s.Show();
         ship.Draw();
+        if (Widget.Preview) return;
 
         timer = new System.Windows.Forms.Timer { Interval = 66 };
         timer.Tick += (s, e) => Tick();
@@ -1629,14 +1646,16 @@ static class Scene
         Tick();
     }
 
-    public static void Stop()
+    public static void Stop(bool restoreWallpaper = true)
     {
         if (timer != null) { timer.Stop(); timer.Dispose(); timer = null; }
-        foreach (var s in sprites) s.Close();
+        foreach (var s in sprites) s.Dispose();
         sprites.Clear();
         gulls.Clear(); petals.Clear(); twinkles.Clear(); sprays.Clear();
+        if (hatImg != null) { hatImg.Dispose(); hatImg = null; }
+        if (shipImg != null) { shipImg.Dispose(); shipImg = null; }
         // the crew picture stays as a still wallpaper; the sunset scene needs its full version back (with the hat)
-        if (Mode != "crew") SetWallpaper(FullWallpaper);
+        if (restoreWallpaper && Mode != "crew") SetWallpaper(FullWallpaper);
     }
 
     // Nothing to see while a maximised or full-screen window covers the desktop, so skip the work.
@@ -1668,7 +1687,7 @@ static class Scene
     static void Tick(bool force)
     {
         if (!force && Covered()) { timer.Interval = 500; return; }
-        timer.Interval = 66;
+        if (timer != null) timer.Interval = 66;
         double t = clock.Elapsed.TotalSeconds;
         Rectangle screen = Screen.PrimaryScreen.Bounds;
         if (petals.Count > 0) { TickCrew(t, screen); return; }
@@ -1711,62 +1730,51 @@ static class Scene
 static class Program
 {
     static readonly List<Widget> widgets = new List<Widget>();
+    static bool? previewPhotos;
 
     static bool ShowPhotos
     {
-        get { return Settings.Get("photos", Scene.Mode == "crew" ? "0" : "1") == "1"; }
+        get { return previewPhotos ?? (Settings.Get("photos", Scene.Mode == "crew" ? "0" : "1") == "1"); }
         set { Settings.Set("photos", value ? "1" : "0"); }
     }
 
     static void Build()
     {
-        foreach (var w in widgets) w.Close();
+        foreach (var w in widgets) w.Dispose();
         widgets.Clear();
-        float sc = Native.GetDpiForSystem() / 96f;
-        int screenW = (int)(Screen.PrimaryScreen.Bounds.Width / sc);
-        int U = Theme.Unit, G = Theme.Gap;
-        int screenH = (int)(Screen.PrimaryScreen.Bounds.Height / sc);
-        int left = 24, top = 24;
-        int row = U + G;
-        int right = screenW - 24 - U;              // outer right column
-        int right2 = right - U - G;                // inner right column (medium widgets start here)
-        int bottom = screenH - 24 - U;             // bottom row
+        Rectangle area = Screen.PrimaryScreen.WorkingArea;
+        const int margin = 24, dockClearance = 32;
+        const int row = Theme.Unit + Theme.Gap;
+        int minimumWidth = 2 * margin + 2 * Theme.Medium + Theme.Unit;
+        int minimumHeight = 2 * margin + dockClearance + 3 * row + Theme.Unit;
+        Widget.LayoutScale = Math.Min(Native.GetDpiForSystem() / 96f,
+            Math.Min((float)area.Width / minimumWidth, (float)area.Height / minimumHeight));
+        int width = (int)(area.Width / Widget.LayoutScale);
+        int height = (int)(area.Height / Widget.LayoutScale);
+        int left = margin, top = margin;
+        int right = width - margin - Theme.Unit;
+        int rightRail = width - margin - Theme.Medium;
+        int bottom = height - margin - dockClearance - Theme.Unit;
+        bool crew = Scene.Mode == "crew";
 
-        if (Scene.Mode == "crew")
-        {
-            // Edges only, so the crew in the middle of the picture stays visible:
-            // sky top-right, figurehead/railing on the right, splashing water bottom-left.
-            widgets.Add(new FoldersWidget(right2, top));
-            widgets.Add(new WeatherWidget(right2, top + row));
-            widgets.Add(new ClockWidget(right, top + row * 2));
-            widgets.Add(new SystemWidget(right2, top + row * 3));
-            widgets.Add(new CalendarWidget(right, top + row * 3));
-            widgets.Add(new TodoWidget(left, bottom - row));
-            widgets.Add(new MusicWidget(left, bottom));
-        }
-        else
-        {
-            // Left: folders, to-do + calendar, music. Centre: photos and weather, leaving the wallpaper's ship clear.
-            int centre = left + Theme.Medium + G;
-            widgets.Add(new FoldersWidget(left, top));
-            widgets.Add(new TodoWidget(left, top + row));
-            widgets.Add(new CalendarWidget(left + U + G, top + row));
-            widgets.Add(new MusicWidget(left, top + row * 2));
-            widgets.Add(new WeatherWidget(centre, top + row));
-            widgets.Add(new ClockWidget(right, top + row));
-            widgets.Add(new SystemWidget(right, top + row * 3));
-        }
+        widgets.Add(new FoldersWidget(crew ? rightRail : left, top));
+        widgets.Add(new WeatherWidget(rightRail, crew ? bottom : top));
+        widgets.Add(new ClockWidget(right, top + row));
+        widgets.Add(new SystemWidget(crew ? right : left, top + (crew ? 2 : 3) * row));
+        int tasks = crew ? bottom - row : top + row;
+        widgets.Add(new TodoWidget(left, tasks));
+        widgets.Add(new CalendarWidget(left + row, tasks));
+        widgets.Add(new MusicWidget(left, crew ? bottom : top + 2 * row));
 
-        // Photo widgets: off by default with the crew picture (it already is the photo), on for the sunset scene.
         if (ShowPhotos)
         {
-            int px = Scene.Mode == "crew" ? left : left + Theme.Medium + G;
-            int py = Scene.Mode == "crew" ? top : top;
+            int px = crew ? left : rightRail;
+            int py = crew ? top : top + 2 * row;
             widgets.Add(new StripWidget("strip", new[] { "photo2.jpg", "photo3.jpg", "photo4.jpg" }, px, py));
-            widgets.Add(new PhotoWidget("photo-top", "photo1.jpg", false, right, top));
-            widgets.Add(new PhotoWidget("photo-bottom", "photo5.jpg", true, Scene.Mode == "crew" ? right2 : right, top + row * 2));
+            widgets.Add(new PhotoWidget("photo-top", "photo1.jpg", false, px, py + row));
+            widgets.Add(new PhotoWidget("photo-bottom", "photo5.jpg", true, px + row, py + row));
         }
-        foreach (var w in widgets) w.Show();
+        if (!Widget.Preview) foreach (var w in widgets) w.Show();
     }
 
     static TodoWidget Todo() { foreach (var w in widgets) if (w is TodoWidget) return (TodoWidget)w; return null; }
@@ -1782,7 +1790,15 @@ static class Program
             bool snapshot = args.Length > 2 && args[1] == "--snapshot";
             if (!fresh && !snapshot) return;
             Application.EnableVisualStyles();
-            Settings.Load();
+            Settings.Load(snapshot);
+            if (snapshot)
+            {
+                Widget.Preview = true;
+                Scene.PreviewMode = args.Length > 3 ? args[3] : null;
+                if (args.Length > 4) previewPhotos = args[4] == "photos";
+                SaveSnapshot(args[2]);
+                return;
+            }
 
             var menu = new ContextMenuStrip { Renderer = new ToolStripProfessionalRenderer(new DarkColors()), ForeColor = Theme.Text, ShowImageMargin = false };
             menu.Font = new Font(Theme.Body, 10f);
@@ -1801,7 +1817,7 @@ static class Program
             sceneItem.CheckedChanged += (s, e) => Scene.Enabled = sceneItem.Checked;
             menu.Items.Add(sceneItem);
             var styles = new ToolStripMenuItem("Scene style");
-            var crew = new ToolStripMenuItem("Straw Hat crew (your picture)") { Checked = Scene.Mode == "crew" };
+            var crew = new ToolStripMenuItem("Straw Hat crew (your picture)") { Checked = Scene.Mode == "crew", Enabled = Scene.HasCrewWallpaper };
             var sunset = new ToolStripMenuItem("Straw hat sunset") { Checked = Scene.Mode != "crew" };
             crew.Click += (s, e) => { Scene.Mode = "crew"; crew.Checked = true; sunset.Checked = false; Settings.ClearPositions(); Build(); };
             sunset.Click += (s, e) => { Scene.Mode = "sunset"; sunset.Checked = true; crew.Checked = false; Settings.ClearPositions(); Build(); };
@@ -1818,44 +1834,74 @@ static class Program
             foreach (ToolStripItem it in menu.Items) it.ForeColor = Theme.Text;
             Widget.SharedMenu = menu;
 
-            // Swap photos in automatically when files in Pictures\Widgets change.
-            var watcher = new FileSystemWatcher(Settings.PhotoDir) { EnableRaisingEvents = true };
-            var debounce = new System.Windows.Forms.Timer { Interval = 800 };
-            debounce.Tick += (s, e) => { debounce.Stop(); foreach (var w in widgets) if (w is PhotoWidget || w is StripWidget) w.Reload(); };
-            FileSystemEventHandler changed = (s, e) => { if (widgets.Count > 0) widgets[0].BeginInvoke((Action)(() => { debounce.Stop(); debounce.Start(); })); };
-            watcher.Changed += changed; watcher.Created += changed; watcher.Renamed += (s, e) => changed(s, e);
-
-            SystemEvents.DisplaySettingsChanged += (s, e) => { foreach (var w in widgets) w.Redraw(); };
-
             Build();
             if (Scene.Enabled) Scene.Start();
-            if (!snapshot) Application.ApplicationExit += (s, e) => { if (Scene.Enabled) Scene.Stop(); }; // closing widgets brings back the still wallpaper with the hat
-
-            // --snapshot <png>: draw every widget over the wallpaper into one image (for previews), then exit.
-            if (snapshot)
+            var ui = SynchronizationContext.Current;
+            using (var watcher = new FileSystemWatcher(Settings.PhotoDir))
+            using (var photosChanged = new System.Windows.Forms.Timer { Interval = 800 })
+            using (var displayChanged = new System.Windows.Forms.Timer { Interval = 500 })
             {
-                var shot = new System.Windows.Forms.Timer { Interval = 6000 };
-                shot.Tick += (s, e) =>
+                photosChanged.Tick += (s, e) =>
                 {
-                    shot.Stop();
-                    var b = Screen.PrimaryScreen.Bounds;
-                    using (var canvas = new Bitmap(b.Width, b.Height))
-                    using (var g = Graphics.FromImage(canvas))
-                    {
-                        string wp = (string)Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Desktop", "WallPaper", "");
-                        if (Scene.Enabled) wp = Scene.CurrentWallpaper;
-                        if (File.Exists(wp)) using (var img = Image.FromFile(wp)) g.DrawImage(img, 0, 0, b.Width, b.Height);
-                        Scene.Render(g);
-                        foreach (var w in widgets)
-                            using (var bmp = w.Snapshot())
-                                if (bmp != null) g.DrawImage(bmp, w.Left, w.Top);
-                        canvas.Save(args[2]);
-                    }
-                    Application.Exit();
+                    photosChanged.Stop();
+                    foreach (var w in widgets) if (w is PhotoWidget || w is StripWidget) w.Reload();
                 };
-                shot.Start();
+                FileSystemEventHandler changed = (s, e) => ui.Post(_ => { photosChanged.Stop(); photosChanged.Start(); }, null);
+                watcher.Changed += changed;
+                watcher.Created += changed;
+                watcher.Deleted += changed;
+                watcher.Renamed += (s, e) => changed(s, e);
+                watcher.EnableRaisingEvents = true;
+
+                displayChanged.Tick += (s, e) =>
+                {
+                    displayChanged.Stop();
+                    Build();
+                    if (Scene.Enabled) { Scene.Stop(false); Scene.Start(); }
+                };
+                EventHandler display = (s, e) => ui.Post(_ => { displayChanged.Stop(); displayChanged.Start(); }, null);
+                SystemEvents.DisplaySettingsChanged += display;
+                try { Application.Run(); }
+                finally
+                {
+                    SystemEvents.DisplaySettingsChanged -= display;
+                    if (Scene.Enabled) Scene.Stop();
+                }
             }
-            Application.Run();
+        }
+    }
+
+    static void SaveSnapshot(string path)
+    {
+        Build();
+        try
+        {
+            if (Scene.Enabled) Scene.Start();
+            var bounds = Screen.PrimaryScreen.Bounds;
+            using (var canvas = new Bitmap(bounds.Width, bounds.Height))
+            using (var g = Graphics.FromImage(canvas))
+            {
+                g.Clear(Theme.CardBottom);
+                string wallpaper = Scene.SnapshotWallpaper;
+                if (File.Exists(wallpaper))
+                    using (var img = Image.FromFile(wallpaper))
+                    {
+                        float scale = Math.Max((float)bounds.Width / img.Width, (float)bounds.Height / img.Height);
+                        float w = img.Width * scale, h = img.Height * scale;
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(img, (bounds.Width - w) / 2, (bounds.Height - h) / 2, w, h);
+                    }
+                Scene.Render(g);
+                foreach (var widget in widgets)
+                    using (var bitmap = widget.Snapshot())
+                        g.DrawImageUnscaled(bitmap, widget.Left - bounds.Left, widget.Top - bounds.Top);
+                canvas.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+        finally
+        {
+            Scene.Stop();
+            foreach (var widget in widgets) widget.Dispose();
         }
     }
 }
