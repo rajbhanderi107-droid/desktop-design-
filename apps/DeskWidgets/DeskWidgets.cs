@@ -17,8 +17,9 @@ using Microsoft.Win32;
 
 static class Theme
 {
-    public static readonly Color CardTop = Color.FromArgb(236, 44, 34, 64);
-    public static readonly Color CardBottom = Color.FromArgb(236, 20, 16, 32);
+    // Rich plum-to-ink card tones
+    public static readonly Color CardTop = Color.FromArgb(240, 52, 36, 70);
+    public static readonly Color CardBottom = Color.FromArgb(240, 16, 12, 26);
     public static readonly Color Gold = Color.FromArgb(244, 192, 62);
     public static readonly Color Red = Color.FromArgb(222, 46, 56);
     public static readonly Color Sea = Color.FromArgb(70, 130, 230);
@@ -259,16 +260,66 @@ abstract class Widget : Form
     protected float Radius { get { return S(22); } }
 
     // Card material: soft vertical gradient, a hairline inner edge and a faint top highlight.
+    // Fine film grain, tiled over every card: gives the flat gradients a printed, premium feel.
+    static TextureBrush grain;
+    static TextureBrush Grain
+    {
+        get
+        {
+            if (grain != null) return grain;
+            var rnd = new Random(11);
+            var bmp = new Bitmap(96, 96, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            for (int y = 0; y < 96; y++)
+                for (int x = 0; x < 96; x++)
+                {
+                    int v = rnd.Next(256);
+                    bmp.SetPixel(x, y, v > 128 ? Color.FromArgb((v - 128) / 12, 255, 255, 255) : Color.FromArgb((128 - v) / 10, 0, 0, 0));
+                }
+            grain = new TextureBrush(bmp, WrapMode.Tile);
+            return grain;
+        }
+    }
+
+    // Champagne gold for edges and headings.
+    public static readonly Color ChampagneHi = Color.FromArgb(255, 248, 222, 160), ChampagneLo = Color.FromArgb(255, 196, 146, 58);
+
+    // Rich card material: three-tone gradient, a warm glow from the top-left, film grain,
+    // a champagne-gold hairline (bright at the top, fading down) and a soft inner top highlight.
     protected void FillCard(Graphics g, RectangleF card, Color top, Color bottom)
     {
         using (var path = Round(card, Radius))
         {
-            using (var b = new LinearGradientBrush(card, top, bottom, 90f)) g.FillPath(b, path);
+            using (var b = new LinearGradientBrush(card, top, bottom, 90f))
+            {
+                var mid = Color.FromArgb((top.A + bottom.A) / 2, (top.R * 2 + bottom.R * 3) / 5, (top.G * 2 + bottom.G * 3) / 5, (top.B * 2 + bottom.B * 3) / 5);
+                b.InterpolationColors = new ColorBlend(3) { Colors = new[] { top, mid, bottom }, Positions = new[] { 0f, 0.55f, 1f } };
+                g.FillPath(b, path);
+            }
+
+            var state = g.Save();
+            g.SetClip(path);
+            using (var glowPath = new GraphicsPath())
+            {
+                var gr = new RectangleF(card.X - card.Width * 0.35f, card.Y - card.Height * 0.6f, card.Width * 1.1f, card.Height * 1.3f);
+                glowPath.AddEllipse(gr);
+                using (var glow = new PathGradientBrush(glowPath) { CenterColor = Color.FromArgb(30, 255, 196, 110), SurroundColors = new[] { Color.FromArgb(0, 255, 196, 110) } })
+                    g.FillPath(glow, glowPath);
+            }
+            g.FillPath(Grain, path);
+            g.Restore(state);
+
             var inner = card;
-            inner.Inflate(-0.5f, -0.5f);
-            using (var ip = Round(inner, Radius - 0.5f))
-            using (var pen = new Pen(Color.FromArgb(26, 255, 255, 255), 1f))
+            inner.Inflate(-0.75f, -0.75f);
+            using (var ip = Round(inner, Radius - 0.75f))
+            using (var rim = new LinearGradientBrush(card, Color.FromArgb(150, ChampagneHi), Color.FromArgb(18, ChampagneLo), 90f))
+            using (var pen = new Pen(rim, 1.2f))
                 g.DrawPath(pen, ip);
+            var sheen = new RectangleF(card.X + Radius, card.Y + 1.5f, card.Width - 2 * Radius, 1.2f);
+            using (var sb = new LinearGradientBrush(new RectangleF(sheen.X - 1, sheen.Y, sheen.Width + 2, sheen.Height), Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 0f))
+            {
+                sb.InterpolationColors = new ColorBlend(3) { Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(70, 255, 245, 225), Color.FromArgb(0, 255, 255, 255) }, Positions = new[] { 0f, 0.5f, 1f } };
+                g.FillRectangle(sb, sheen);
+            }
         }
     }
 
@@ -323,13 +374,14 @@ abstract class Widget : Form
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             RectangleF card = CardRect;
             // Soft layered shadow, deeper while hovered
-            int layers = 7;
+            // Deep, soft, slightly warm shadow (more layers, lower opacity each), deeper while hovered
+            int layers = 10;
             for (int i = layers; i >= 1; i--)
             {
-                float spread = i * Sc * (1.3f + (float)hover * 0.5f);
-                var r = new RectangleF(card.X - spread, card.Y - spread + S(5) + (float)hover * S(3), card.Width + spread * 2, card.Height + spread * 2);
+                float spread = i * Sc * (1.25f + (float)hover * 0.45f);
+                var r = new RectangleF(card.X - spread * 0.8f, card.Y - spread * 0.6f + S(7) + (float)hover * S(3), card.Width + spread * 1.6f, card.Height + spread * 1.6f);
                 using (var path = Round(r, Radius + spread))
-                using (var b = new SolidBrush(Color.FromArgb((int)(8 + hover * 3), 0, 0, 0)))
+                using (var b = new SolidBrush(Color.FromArgb((int)(7 + hover * 2), 12, 4, 10)))
                     g.FillPath(b, path);
             }
             Draw(g, card);
@@ -364,7 +416,9 @@ abstract class Widget : Form
                     g.DrawImage(img, new Rectangle((int)(dst.X + (dst.Width - w) / 2), (int)(dst.Y + (dst.Height - h) / 2), (int)w, (int)h), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, ia);
                 }
             g.Restore(state);
-            using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255), 1f)) g.DrawPath(pen, path);
+            // photos get the same champagne hairline as the cards
+            using (var rim = new LinearGradientBrush(dst, Color.FromArgb(140, ChampagneHi), Color.FromArgb(30, ChampagneLo), 90f))
+            using (var pen = new Pen(rim, 1.2f)) g.DrawPath(pen, path);
         }
     }
 
@@ -377,7 +431,11 @@ abstract class Widget : Form
 
     protected void Label(Graphics g, string s, Font f, Color c, RectangleF r, StringAlignment h)
     {
-        using (var b = new SolidBrush(c))
+        // Gold headings get a champagne gradient instead of flat yellow.
+        Brush b = c == Theme.Gold
+            ? (Brush)new LinearGradientBrush(new RectangleF(r.X, r.Y, r.Width, Math.Max(2, f.Height)), ChampagneHi, ChampagneLo, 90f)
+            : new SolidBrush(c);
+        using (b)
         using (var sf = new StringFormat { Alignment = h, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString(s, f, b, r, sf);
     }
